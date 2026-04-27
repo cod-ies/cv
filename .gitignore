@@ -1,0 +1,43 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# build
+dist/
+build/
+
+# native bindings build artifacts
+native/eric-binding/build/
+native/eric-binding/lib/libericapi.so
+native/eric-binding/lib/ericapi.dll
+
+# env files
+.env
+.env.local
+.env.production
+
+# Prisma
+prisma/migrations/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+
+# coverage
+coverage/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Certificates (never commit)
+*.pfx
+*.p12
+*.pem

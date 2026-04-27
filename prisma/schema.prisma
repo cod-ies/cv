@@ -1,0 +1,202 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Employees ────────────────────────────────────────────────────────────────
+
+model Employee {
+  id              String   @id @default(uuid()) @db.Uuid
+  shiftpilotId    String   @unique @map("shiftpilot_id") @db.VarChar(64)
+  // AES-256 encrypted at application layer before storage
+  steuerId        String   @map("steuer_id") @db.Char(11)
+  vorname         String
+  nachname        String
+  // AES-256 encrypted at application layer
+  geburtsdatum    String   @map("geburtsdatum")
+  bundesland      String   @db.Char(5)
+  hourlyRateCents BigInt   @map("hourly_rate_cents")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  taxFeatures    TaxFeature[]
+  shifts         Shift[]
+  payrollEntries PayrollEntry[]
+
+  @@map("employees")
+}
+
+// ─── ELStAM Lohnsteuerabzugsmerkmale ─────────────────────────────────────────
+
+model TaxFeature {
+  id                   String    @id @default(uuid()) @db.Uuid
+  employeeId           String    @map("employee_id") @db.Uuid
+  steuerklasse         Int       @map("steuerklasse") @db.SmallInt
+  kinderfreibetrag     Decimal   @map("kinderfreibetrag") @db.Decimal(4, 1)
+  kirchensteuerMerkmal String?   @map("kirchensteuer_merkmal") @db.VarChar(2)
+  faktorverfahren      Decimal?  @map("faktorverfahren") @db.Decimal(5, 3)
+  validFrom            DateTime  @map("valid_from") @db.Date
+  validTo              DateTime? @map("valid_to") @db.Date
+  fetchedAt            DateTime  @default(now()) @map("fetched_at") @db.Timestamptz(6)
+  rawXml               String?   @map("raw_xml") @db.Text
+
+  employee       Employee       @relation(fields: [employeeId], references: [id])
+  payrollEntries PayrollEntry[]
+
+  @@unique([employeeId, validFrom])
+  @@map("tax_features")
+}
+
+// ─── Shifts (from ShiftPilot) ─────────────────────────────────────────────────
+
+model Shift {
+  id              String   @id @default(uuid()) @db.Uuid
+  shiftpilotId    String   @unique @map("shiftpilot_id") @db.VarChar(64)
+  employeeId      String   @map("employee_id") @db.Uuid
+  startedAt       DateTime @map("started_at") @db.Timestamptz(6)
+  endedAt         DateTime @map("ended_at") @db.Timestamptz(6)
+  breakMinutes    Int      @default(0) @map("break_minutes")
+  hourlyRateCents BigInt   @map("hourly_rate_cents")
+  rawPayload      Json     @map("raw_payload")
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@map("shifts")
+}
+
+// ─── Payroll Runs ─────────────────────────────────────────────────────────────
+
+model PayrollRun {
+  id          String    @id @default(uuid()) @db.Uuid
+  periodYear  Int       @map("period_year") @db.SmallInt
+  periodMonth Int       @map("period_month") @db.SmallInt
+  status      String    @default("pending")
+  triggeredBy String?   @map("triggered_by")
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  entries            PayrollEntry[]
+  elsterSubmissions  ElsterSubmission[]
+  datevExports       DatevExport[]
+
+  @@unique([periodYear, periodMonth])
+  @@map("payroll_runs")
+}
+
+// ─── Payroll Entries (one per employee per run) ────────────────────────────────
+
+model PayrollEntry {
+  id           String @id @default(uuid()) @db.Uuid
+  payrollRunId String @map("payroll_run_id") @db.Uuid
+  employeeId   String @map("employee_id") @db.Uuid
+  taxFeatureId String @map("tax_feature_id") @db.Uuid
+
+  // Gross
+  bruttoEntgeltCents BigInt @map("brutto_entgelt_cents")
+
+  // Lohnsteuer block
+  lohnsteuerCents    BigInt @map("lohnsteuer_cents")
+  soliCents          BigInt @map("soli_cents")
+  kirchensteuerCents BigInt @map("kirchensteuer_cents")
+
+  // SV Arbeitnehmer
+  kvAnCents BigInt @map("kv_an_cents")
+  pvAnCents BigInt @map("pv_an_cents")
+  rvAnCents BigInt @map("rv_an_cents")
+  avAnCents BigInt @map("av_an_cents")
+
+  // SV Arbeitgeber
+  kvAgCents BigInt @map("kv_ag_cents")
+  pvAgCents BigInt @map("pv_ag_cents")
+  rvAgCents BigInt @map("rv_ag_cents")
+  avAgCents BigInt @map("av_ag_cents")
+
+  // Net
+  nettoEntgeltCents BigInt @map("netto_entgelt_cents")
+
+  // Year-to-date
+  ytdBruttoCents    BigInt @map("ytd_brutto_cents")
+  ytdLohnsteuerCents BigInt @map("ytd_lohnsteuer_cents")
+
+  // Artifact references
+  payslipUrl    String? @map("payslip_url")
+  datevExportId String? @map("datev_export_id") @db.Uuid
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id])
+  employee   Employee   @relation(fields: [employeeId], references: [id])
+  taxFeature TaxFeature @relation(fields: [taxFeatureId], references: [id])
+
+  @@unique([payrollRunId, employeeId])
+  @@map("payroll_entries")
+}
+
+// ─── ELSTER Lohnsteuer-Anmeldung Submissions ─────────────────────────────────
+
+model ElsterSubmission {
+  id              String    @id @default(uuid()) @db.Uuid
+  payrollRunId    String    @map("payroll_run_id") @db.Uuid
+  periodYear      Int       @map("period_year") @db.SmallInt
+  periodMonth     Int       @map("period_month") @db.SmallInt
+  totalLstCents   BigInt    @map("total_lst_cents")
+  totalSoliCents  BigInt    @map("total_soli_cents")
+  totalKstCents   BigInt    @map("total_kst_cents")
+  transferTicket  String?   @map("transfer_ticket")
+  ericReturnCode  Int?      @map("eric_return_code")
+  status          String
+  submittedAt     DateTime? @map("submitted_at") @db.Timestamptz(6)
+  responseXml     String?   @map("response_xml") @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id])
+
+  @@map("elster_submissions")
+}
+
+// ─── DATEV Exports ────────────────────────────────────────────────────────────
+
+model DatevExport {
+  id           String   @id @default(uuid()) @db.Uuid
+  payrollRunId String   @map("payroll_run_id") @db.Uuid
+  fileUrl      String   @map("file_url")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id])
+
+  @@map("datev_exports")
+}
+
+// ─── Job Run Observability ────────────────────────────────────────────────────
+
+model JobRun {
+  id           String    @id @default(uuid()) @db.Uuid
+  jobName      String    @map("job_name")
+  startedAt    DateTime  @map("started_at") @db.Timestamptz(6)
+  completedAt  DateTime? @map("completed_at") @db.Timestamptz(6)
+  status       String
+  errorMessage String?   @map("error_message") @db.Text
+  metadata     Json?
+
+  @@map("job_runs")
+}
+
+// ─── ELStAM Registration Tracking ────────────────────────────────────────────
+
+model ElstamRegistration {
+  id                   String    @id @default(uuid()) @db.Uuid
+  employeeId           String    @map("employee_id") @db.Uuid
+  type                 String    // 'anmeldung' | 'abmeldung'
+  status               String    // 'pending' | 'submitted' | 'confirmed' | 'failed'
+  beschaeftigungBeginn DateTime? @map("beschaeftigung_beginn") @db.Date
+  beschaeftigungEnde   DateTime? @map("beschaeftigung_ende") @db.Date
+  requestXml           String?   @map("request_xml") @db.Text
+  responseXml          String?   @map("response_xml") @db.Text
+  ericReturnCode       Int?      @map("eric_return_code")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("elstam_registrations")
+}
